@@ -1,7 +1,6 @@
 {
   "name": "vLuau",
   "tree": {
-    "$className": "ModuleScript",
     "$path": "init.lua",
     "Ception": {
       "$path": "Ception.luau"
