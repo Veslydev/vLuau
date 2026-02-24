@@ -32,6 +32,13 @@ jobs:
           chmod +x rojo
           sudo mv rojo /usr/local/bin/rojo
 
+      - name: Stage sources into src/
+        run: |
+          mkdir -p src
+          cp init.lua     src/init.lua
+          cp Fiu.luau     src/Fiu.luau
+          cp Ception.luau src/Ception.luau
+
       - name: Build .rbxm
         run: rojo build default.project.json --output vLuau.rbxm
 

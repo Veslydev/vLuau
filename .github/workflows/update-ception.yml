@@ -3,108 +3,117 @@ name: Update Ception
 # Runs every hour to check for a new LuauCeption release.
 # Also triggerable manually from the Actions tab.
 on:
-    schedule:
-        - cron: "0 * * * *"
-    workflow_dispatch:
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
 
 permissions:
-    contents: write
+  contents: write
 
 jobs:
-    update:
-        name: Check & Update Ception
-        runs-on: ubuntu-latest
+  update:
+    name: Check & Update Ception
+    runs-on: ubuntu-latest
 
-        steps:
-            - name: Checkout vLuau
-              uses: actions/checkout@v4
+    steps:
+      - name: Checkout vLuau
+        uses: actions/checkout@v4
 
-            # ── Fetch latest LuauCeption release info ──────────────────────────
-            - name: Get latest LuauCeption release
-              id: ception
-              run: |
-                  RELEASE=$(curl -fsSL \
-                    -H "Accept: application/vnd.github+json" \
-                    https://api.github.com/repos/Veslydev/LuauCeption/releases/latest)
+      # ── Fetch latest LuauCeption release info ──────────────────────────
+      - name: Get latest LuauCeption release
+        id: ception
+        run: |
+          RELEASE=$(curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/Veslydev/LuauCeption/releases/latest)
 
-                  TAG=$(echo "$RELEASE" | jq -r '.tag_name')
-                  URL=$(echo "$RELEASE" | jq -r \
-                    '.assets[] | select(.name | startswith("Luau.LuauCeption.Compiler.")) | .browser_download_url')
+          TAG=$(echo "$RELEASE" | jq -r '.tag_name')
+          URL=$(echo "$RELEASE" | jq -r \
+            '.assets[] | select(.name | startswith("Luau.LuauCeption.Compiler.")) | .browser_download_url')
 
-                  echo "tag=$TAG"  >> "$GITHUB_OUTPUT"
-                  echo "url=$URL"  >> "$GITHUB_OUTPUT"
-                  echo "Latest LuauCeption release: $TAG"
-                  echo "Compiler asset URL: $URL"
+          echo "tag=$TAG"  >> "$GITHUB_OUTPUT"
+          echo "url=$URL"  >> "$GITHUB_OUTPUT"
+          echo "Latest LuauCeption release: $TAG"
+          echo "Compiler asset URL: $URL"
 
-            # ── Skip if already up-to-date ─────────────────────────────────────
-            - name: Check if update is needed
-              id: check
-              run: |
-                  CURRENT=$(cat .ception-version 2>/dev/null | tr -d '[:space:]' || echo "none")
-                  LATEST="${{ steps.ception.outputs.tag }}"
-                  echo "Current bundled version : $CURRENT"
-                  echo "Latest upstream version : $LATEST"
-                  if [ "$CURRENT" = "$LATEST" ]; then
-                    echo "skip=true" >> "$GITHUB_OUTPUT"
-                    echo "Already up-to-date, skipping."
-                  else
-                    echo "skip=false" >> "$GITHUB_OUTPUT"
-                    echo "Update required: $CURRENT → $LATEST"
-                  fi
+      # ── Skip if already up-to-date ─────────────────────────────────────
+      - name: Check if update is needed
+        id: check
+        run: |
+          CURRENT=$(cat .ception-version 2>/dev/null | tr -d '[:space:]' || echo "none")
+          LATEST="${{ steps.ception.outputs.tag }}"
+          echo "Current bundled version : $CURRENT"
+          echo "Latest upstream version : $LATEST"
+          if [ "$CURRENT" = "$LATEST" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Already up-to-date, skipping."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Update required: $CURRENT → $LATEST"
+          fi
 
-            # ── Download new Ception.luau ──────────────────────────────────────
-            - name: Download Ception.luau
-              if: steps.check.outputs.skip == 'false'
-              run: |
-                  curl -fsSL "${{ steps.ception.outputs.url }}" -o Ception.luau
-                  echo "${{ steps.ception.outputs.tag }}" > .ception-version
-                  echo "Downloaded Ception.luau ($(wc -c < Ception.luau) bytes)"
+      # ── Download new Ception.luau ──────────────────────────────────────
+      - name: Download Ception.luau
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          curl -fsSL "${{ steps.ception.outputs.url }}" -o Ception.luau
+          echo "${{ steps.ception.outputs.tag }}" > .ception-version
+          echo "Downloaded Ception.luau ($(wc -c < Ception.luau) bytes)"
 
-            # ── Install Rojo via aftman ────────────────────────────────────────
-            - name: Setup aftman
-              if: steps.check.outputs.skip == 'false'
-              uses: ok-nick/setup-aftman@v0.4.2
+      # ── Install Rojo via aftman ────────────────────────────────────────
+      - name: Setup aftman
+        if: steps.check.outputs.skip == 'false'
+        uses: ok-nick/setup-aftman@v0.4.2
 
-            - name: Install tools (Rojo)
-              if: steps.check.outputs.skip == 'false'
-              run: aftman install
+      - name: Install tools (Rojo)
+        if: steps.check.outputs.skip == 'false'
+        run: aftman install
 
-            # ── Build .rbxm ───────────────────────────────────────────────────
-            - name: Build vLuau.rbxm
-              if: steps.check.outputs.skip == 'false'
-              run: rojo build default.project.json --output vLuau.rbxm
+      # ── Stage sources so Rojo sees the correct directory layout ──────
+      - name: Stage sources into src/
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          mkdir -p src
+          cp init.lua    src/init.lua
+          cp Fiu.luau    src/Fiu.luau
+          cp Ception.luau src/Ception.luau
 
-            # ── Commit updated files back to main ─────────────────────────────
-            - name: Commit & push
-              if: steps.check.outputs.skip == 'false'
-              run: |
-                  git config user.name  "github-actions[bot]"
-                  git config user.email "github-actions[bot]@users.noreply.github.com"
-                  git add Ception.luau .ception-version
-                  git commit -m "chore: update Ception → LuauCeption ${{ steps.ception.outputs.tag }}"
-                  git push
+      # ── Build .rbxm ───────────────────────────────────────────────────
+      - name: Build vLuau.rbxm
+        if: steps.check.outputs.skip == 'false'
+        run: rojo build default.project.json --output vLuau.rbxm
 
-            # ── Create GitHub Release with the new .rbxm ──────────────────────
-            - name: Release vLuau.rbxm
-              if: steps.check.outputs.skip == 'false'
-              uses: softprops/action-gh-release@v2
-              with:
-                  tag_name: "ception-${{ steps.ception.outputs.tag }}"
-                  name: "vLuau — Ception ${{ steps.ception.outputs.tag }}"
-                  files: vLuau.rbxm
-                  body: |
-                      Auto-updated from [LuauCeption ${{ steps.ception.outputs.tag }}](https://github.com/Veslydev/LuauCeption/releases/tag/${{ steps.ception.outputs.tag }}).
+      # ── Commit updated files back to main ─────────────────────────────
+      - name: Commit & push
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Ception.luau .ception-version
+          git commit -m "chore: update Ception → LuauCeption ${{ steps.ception.outputs.tag }}"
+          git push
 
-                      Ception bundles the Luau **${{ steps.ception.outputs.tag }}** compiler transpiled to Luau via WebAssembly.
+      # ── Create GitHub Release with the new .rbxm ──────────────────────
+      - name: Release vLuau.rbxm
+        if: steps.check.outputs.skip == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "ception-${{ steps.ception.outputs.tag }}"
+          name: "vLuau — Ception ${{ steps.ception.outputs.tag }}"
+          files: vLuau.rbxm
+          body: |
+            Auto-updated from [LuauCeption ${{ steps.ception.outputs.tag }}](https://github.com/Veslydev/LuauCeption/releases/tag/${{ steps.ception.outputs.tag }}).
 
-                      ### Install
-                      1. Download `vLuau.rbxm`
-                      2. Roblox Studio → Explorer → right-click → **Insert from File**
-                      3. Put `vLuau` in `ReplicatedStorage` (or wherever)
+            Ception bundles the Luau **${{ steps.ception.outputs.tag }}** compiler transpiled to Luau via WebAssembly.
 
-                      ```lua
-                      local loadstring = require(game.ReplicatedStorage.vLuau)
-                      loadstring("print('hello!')")()
-                      ```
-              env:
-                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+            ### Install
+            1. Download `vLuau.rbxm`
+            2. Roblox Studio → Explorer → right-click → **Insert from File**
+            3. Put `vLuau` in `ReplicatedStorage` (or wherever)
+
+            ```lua
+            local loadstring = require(game.ReplicatedStorage.vLuau)
+            loadstring("print('hello!')")()
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,12 +1,6 @@
 {
   "name": "vLuau",
   "tree": {
-    "$path": "init.lua",
-    "Ception": {
-      "$path": "Ception.luau"
-    },
-    "Fiu": {
-      "$path": "Fiu.luau"
-    }
+    "$path": "src"
   }
 }
