@@ -2,6 +2,7 @@
 --// LuauCeption - Compiler Variant
 --// Built from Luau 0.709 (b968ef742741bb2b703afc3b3c53f06608c87481)
 
+local STUB_WARN = false
 
 local __LUAUCEPTION_RUNTIME__ = (function()
 --// Vanilla Luau Vector3 implementation
@@ -111869,7 +111870,6 @@ return function(wasm)
 end
 end)()
 
-local STUB_WARN = false
 type LuauCompileOptions__DARKLUA_TYPE_a = {OptimizationLevel: number, DebugLevel: number, TypeInfoLevel: number, CoverageLevel: number, VectorLibName: string?, VectorLibConstructor: string?, VectorType: string?, MutableGlobals: {string}?, DisabledBuiltins: {string}?}
 
 local __LUAUCEPTION__ = {
@@ -112213,7 +112213,7 @@ do
                 local RuntimeInstance = runtime_initialize({
                     env = common_imports,
                     wasi_snapshot_preview1 = common_imports,
-                    ["a"] = common_imports, -- wasm2luau now minifies import module names to single letters
+                    ['a'] = common_imports,
                 })
                 local rt, memory_at_0, cfns, INDIRECT_FUNCTIONS = RuntimeInstance.rt, RuntimeInstance.memory_list.memory, RuntimeInstance.func_list, RuntimeInstance.table_list.__indirect_function_table
 
