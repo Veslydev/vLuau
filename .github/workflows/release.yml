@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build & Release vLuau.rbxm
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rojo
+        uses: ok-nick/setup-aftman@v0.4.2
+
+      - name: Install tools via aftman
+        run: aftman install
+        # Falls back gracefully if no aftman.toml; the next step installs Rojo directly
+
+      - name: Install Rojo (direct fallback)
+        if: ${{ hashFiles('aftman.toml') == '' }}
+        run: |
+          curl -sL https://github.com/rojo-rbx/rojo/releases/latest/download/rojo-linux-x86_64.zip -o rojo.zip
+          unzip -q rojo.zip
+          chmod +x rojo
+          sudo mv rojo /usr/local/bin/rojo
+
+      - name: Build .rbxm
+        run: rojo build default.project.json --output vLuau.rbxm
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: vLuau.rbxm
+          generate_release_notes: true
+          name: "vLuau ${{ github.ref_name }}"
+          body: |
+            ## vLuau ${{ github.ref_name }}
+
+            Auto-built from source using Rojo.
+
+            ### Installation
+            1. Download `vLuau.rbxm` below
+            2. In Roblox Studio → Explorer, right-click → **Insert from File**
+            3. Drag the inserted `vLuau` ModuleScript anywhere (e.g. `ReplicatedStorage`)
+
+            ### Usage
+            ```lua
+            local loadstring = require(path.to.vLuau)
+            loadstring("print('hello from vLuau!')")()
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -14,7 +14,6 @@ local table_move = table.move
 local table_pack = table.pack
 local table_unpack = table.unpack
 local table_create = table.create
-local table_insert = table.insert
 local table_remove = table.remove
 local table_concat = table.concat
 
@@ -148,8 +147,21 @@ local opList = {
 	{ "IDIVK", 3, 2, false },
 }
 
+-- // Pre-built opcode name lookup, indexed by opcode value (0-based), for fast VM debugging
+local opnames = table_create(#opList)
+for i = 1, #opList do
+	opnames[i - 1] = opList[i][1]
+end
+
 local LUA_MULTRET = -1
 local LUA_GENERALIZED_TERMINATOR = -2
+
+-- // Shared weak metatables — reused by every closure to avoid per-call alloc
+local OPEN_UV_META = {__mode = "vs"}
+local GEN_ITER_META = {__mode = "ks"}
+
+-- // Shared empty varargs object — used by non-vararg protos to avoid allocation
+local EMPTY_VARARGS = {len = 0, list = {}}
 
 local function luau_newsettings()
 	return {
@@ -260,6 +272,11 @@ local function luau_deserialize(bytecode, luau_settings)
 	local stream = if type(bytecode) == "string" then buffer_fromstring(bytecode) else bytecode
 	local cursor = 0
 
+	-- // Shared decode state for readInstruction; reset before each proto
+	local ci = 0
+	local ci_codelist = nil
+	local ci_debugcodelist = nil
+
 	local function readByte()
 		local byte = buffer_readu8(stream, cursor)
 		cursor = cursor + 1
@@ -285,16 +302,22 @@ local function luau_deserialize(bytecode, luau_settings)
 	end
 
 	local function readVarInt()
-		local result = 0
-
-		for i = 0, 4 do
-			local value = readByte()
+		-- // Fast path: the vast majority of varints in Luau bytecode fit in 1-2 bytes
+		local b0 = buffer_readu8(stream, cursor)
+		cursor += 1
+		if b0 < 0x80 then return b0 end
+		local result = bit32_band(b0, 0x7F)
+		local b1 = buffer_readu8(stream, cursor)
+		cursor += 1
+		result = bit32_bor(result, bit32_lshift(bit32_band(b1, 0x7F), 7))
+		if b1 < 0x80 then return result end
+		-- // Slow path: 3-5 byte varints
+		for i = 2, 4 do
+			local value = buffer_readu8(stream, cursor)
+			cursor += 1
 			result = bit32_bor(result, bit32_lshift(bit32_band(value, 0x7F), i * 7))
-			if not bit32_btest(value, 0x80) then
-				break
-			end
+			if not bit32_btest(value, 0x80) then break end
 		end
-
 		return result
 	end
 
@@ -328,25 +351,26 @@ local function luau_deserialize(bytecode, luau_settings)
 		stringList[i] = readString()
 	end
 
-	local function readInstruction(codeList)
+	local function readInstruction()
+		-- // Decode one instruction; results go directly into ci_codelist via upvalues
+		-- // opname / opmode / usesAux are decode-only and NOT stored on inst to reduce alloc size
 		local value = readWord()
 		local opcode = bit32_band(luau_settings.decodeOp(value), 0xFF)
 
 		local opinfo = opList[opcode + 1]
-		local opname = opinfo[1]
 		local opmode = opinfo[2]
-		local kmode = opinfo[3]
+		local kmode  = opinfo[3]
 		local usesAux = opinfo[4]
 
+		-- // kmode is kept because checkkmode needs it in the 2nd pass (after klist is built)
 		local inst = {
 			opcode = opcode;
-			opname = opname;
-			opmode = opmode;
-			kmode = kmode;
-			usesAux = usesAux;
+			kmode  = kmode;
 		}
 
-		table_insert(codeList, inst)
+		ci += 1
+		ci_codelist[ci] = inst
+		ci_debugcodelist[ci] = opcode
 
 		if opmode == 1 then --[[ A ]]
 			inst.A = bit32_band(bit32_rshift(value, 8), 0xFF)
@@ -366,11 +390,13 @@ local function luau_deserialize(bytecode, luau_settings)
 			inst.E = if temp < 0x800000 then temp else temp - 0x1000000
 		end
 
-		if usesAux then 
+		if usesAux then
 			local aux = readWord()
 			inst.aux = aux
-
-			table_insert(codeList, {value = aux, opname = "auxvalue" })
+			-- // Placeholder slot keeps pc indices aligned; never accessed at runtime
+			ci += 1
+			ci_codelist[ci] = {}
+			ci_debugcodelist[ci] = 0
 		end
 
 		return usesAux
@@ -436,21 +462,22 @@ local function luau_deserialize(bytecode, luau_settings)
 
 		local sizecode = readVarInt()
 		local codelist = table_create(sizecode)
+		local debugcodelist = table_create(sizecode)
 
-		local skipnext = false 
+		-- // Wire up shared decode state so readInstruction writes directly into our tables
+		ci = 0
+		ci_codelist = codelist
+		ci_debugcodelist = debugcodelist
+
+		local skipnext = false
 		for i = 1, sizecode do
-			if skipnext then 
+			if skipnext then
 				skipnext = false
-				continue 
+				continue
 			end
-
-			skipnext = readInstruction(codelist)
+			skipnext = readInstruction()
 		end
-
-		local debugcodelist = table_create(sizecode) 
-		for i = 1, sizecode do 
-			debugcodelist[i] = codelist[i].opcode
-		end 
+		-- // debugcodelist built inline above — no second pass needed
 
 		local sizek = readVarInt()
 		local klist = table_create(sizek)
@@ -542,7 +569,7 @@ local function luau_deserialize(bytecode, luau_settings)
 
 			for i = 1, sizecode do 
 				--// p->abslineinfo[pc >> p->linegaplog2] + p->lineinfo[pc];
-				table_insert(instructionlineinfo, abslineinfo[bit32_rshift(i - 1, linegaplog2) + 1] + lineinfo[i])
+				instructionlineinfo[i] = abslineinfo[bit32_rshift(i - 1, linegaplog2) + 1] + lineinfo[i]
 			end
 		end
 
@@ -677,7 +704,7 @@ local function luau_load(module, env, luau_settings)
 				code = proto.code
 			end 
 
-			local top, pc, open_upvalues, generalized_iterators = -1, 1, setmetatable({}, {__mode = "vs"}), setmetatable({}, {__mode = "ks"})
+			local top, pc, open_upvalues, generalized_iterators = -1, 1, setmetatable({}, OPEN_UV_META), setmetatable({}, GEN_ITER_META)
 			local constants = proto.k
 			local debugopcodes = proto.debugcode
 			local extensions = luau_settings.extensions
@@ -694,7 +721,7 @@ local function luau_load(module, env, luau_settings)
 
 				debugging.pc = pc
 				debugging.top = top
-				debugging.name = inst.opname
+				debugging.name = opnames[op]
 
 				pc += 1
 
@@ -874,7 +901,7 @@ local function luau_load(module, env, luau_settings)
 							inst = callInst
 							op = callOp
 							debugging.pc = pc
-							debugging.name = inst.opname
+							debugging.name = opnames[op]
 
 							table_remove(ret_list, 1)
 
@@ -902,19 +929,22 @@ local function luau_load(module, env, luau_settings)
 
 					local params = if B == 0 then top - A else B - 1
 					local func = stack[A]
-					local ret_list = table_pack(
+
+					if C == 1 then
+						--// Fast path: caller discards all returns — skip table_pack entirely
 						func(table_unpack(stack, A + 1, A + params))
-					)
-
-					local ret_num = ret_list.n
-
-					if C == 0 then
-						top = A + ret_num - 1
 					else
-						ret_num = C - 1
+						local ret_list = table_pack(
+							func(table_unpack(stack, A + 1, A + params))
+						)
+						local ret_num = ret_list.n
+						if C == 0 then
+							top = A + ret_num - 1
+						else
+							ret_num = C - 1
+						end
+						table_move(ret_list, 1, ret_num, A, stack)
 					end
-
-					table_move(ret_list, 1, ret_num, A, stack)
 				elseif op == 22 then --[[ RETURN ]]
 					if interruptHook then
 						interruptHook(stack, debugging, proto, module, upvals)	
@@ -1313,7 +1343,7 @@ local function luau_load(module, env, luau_settings)
 				elseif op == 82 then --[[ IDIVK ]]
 					stack[inst.A] = stack[inst.B] // inst.K
 				else
-					error("Unsupported Opcode: " .. inst.opname .. " op: " .. op)
+					error("Unsupported Opcode: " .. (opnames[op] or "?") .. " op: " .. op)
 				end
 			end
 
@@ -1333,18 +1363,17 @@ local function luau_load(module, env, luau_settings)
 		local function wrapped(...)
 			local passed = table_pack(...)
 			local stack = table_create(proto.maxstacksize)
-			local varargs = {
-				len = 0,
-				list = {},
-			}
 
 			table_move(passed, 1, proto.numparams, 0, stack)
 
-			if proto.numparams < passed.n then
+			--// Non-vararg protos share the singleton; vararg protos get their own only if needed
+			local varargs = EMPTY_VARARGS
+			if proto.isvararg and proto.numparams < passed.n then
 				local start = proto.numparams + 1
 				local len = passed.n - proto.numparams
-				varargs.len = len
-				table_move(passed, start, start + len - 1, 1, varargs.list)
+				local list = table_create(len)
+				table_move(passed, start, start + len - 1, 1, list)
+				varargs = {len = len, list = list}
 			end
 
 			passed = nil
