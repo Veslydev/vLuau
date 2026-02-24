@@ -1,5 +1,4 @@
 --!optimize 2
---!native
 --// LuauCeption - Compiler Variant
 --// Built from Luau 0.709 (b968ef742741bb2b703afc3b3c53f06608c87481)
 
@@ -112214,6 +112213,7 @@ do
                 local RuntimeInstance = runtime_initialize({
                     env = common_imports,
                     wasi_snapshot_preview1 = common_imports,
+                    ["a"] = common_imports, -- wasm2luau now minifies import module names to single letters
                 })
                 local rt, memory_at_0, cfns, INDIRECT_FUNCTIONS = RuntimeInstance.rt, RuntimeInstance.memory_list.memory, RuntimeInstance.func_list, RuntimeInstance.table_list.__indirect_function_table
 
