@@ -1381,7 +1381,16 @@ local function luau_load(module, env, luau_settings)
 			local debugging = {pc = 0, name = "NONE"}
 			local result
 			if luau_settings.errorHandling then 
-				result = table_pack(pcall(luau_execute, debugging, stack, proto.protos, proto.code, varargs))
+				result = table_pack(xpcall(luau_execute, function(err)
+					local trace = debug.traceback(tostring(err), 2)
+					local scrubbed = {}
+					for line in trace:gmatch("([^\n]*)\n?") do
+						if not line:find("Fiu") and not line:find("Util") and not line:find("luau_execute") and not line:find("luau_wrapclosure") and line ~= "" then
+							table.insert(scrubbed, line)
+						end
+					end
+					return table.concat(scrubbed, "\n")
+				end, debugging, stack, proto.protos, proto.code, varargs))
 			else
 				result = table_pack(true, luau_execute(debugging, stack, proto.protos, proto.code, varargs))
 			end
@@ -1397,7 +1406,7 @@ local function luau_load(module, env, luau_settings)
 
 				if ttisstring(message) == false then
 					if luau_settings.allowProxyErrors then
-						error(message)
+						error(message, 0)
 					else 
 						message = type(message)
 					end
